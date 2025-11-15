@@ -2,26 +2,37 @@ const int sensorIzquierdo = 2;
 const int sensorDerecho = 3;
 
 const int enableA = 9;
-const int enableB = 10;
+const int enableB = 10;  // Pin 11 para PWM confiable
+
 const int pinMotorA1 = 5;
 const int pinMotorA2 = 4;
-const int pinMotorB1 = 6;
-const int pinMotorB2 = 7;
+const int pinMotorB1 = 7;
+const int pinMotorB2 = 6;
 
 const int ledAtaque = 13;
 
-const int velocidadExploracion = 150;
-const int velocidadAtaque = 240;
+// Ultrasonido
+const int trigPin = 11;
+const int echoPin = 12;
+const int distanciaUmbral = 8; // cm
 
-bool oponenteDetectado = false;
-unsigned long tiempoUltimaDeteccion = 0;
-const unsigned long tiempoEsperaReconexion = 2000;
+const int velocidadExploracion = 160;
+const int velocidadGiro = 200;      // Velocidad para girar buscando
+const int velocidadAtaque = 240;    // Velocidad cuando avanza al ataque
 
-int ultimaDireccion = 0; // 0=ninguna, 1=izquierda, 2=derecha
+bool sensorIzqActivo = false;
+bool sensorDerActivo = false;
+
+// Factores de calibración (ajusta si un motor es más rápido)
+float factorA = 1.0;
+float factorB = 1.0;
 
 void setup() {
-  pinMode(sensorIzquierdo, INPUT);
-  pinMode(sensorDerecho, INPUT);
+  pinMode(sensorIzquierdo, INPUT_PULLUP);
+  pinMode(sensorDerecho, INPUT_PULLUP);
+  
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
   
   pinMode(enableA, OUTPUT);
   pinMode(enableB, OUTPUT);
@@ -32,97 +43,63 @@ void setup() {
   
   pinMode(ledAtaque, OUTPUT);
   
-  attachInterrupt(digitalPinToInterrupt(sensorIzquierdo), deteccionIzquierda, RISING);
-  attachInterrupt(digitalPinToInterrupt(sensorDerecho), deteccionDerecha, RISING);
-  
   Serial.begin(9600);
-  Serial.println("Modo: Exploración");
+  Serial.println("Robot Sumo Iniciado");
   
   delay(2000);
 }
 
 void loop() {
-  if (oponenteDetectado && (millis() - tiempoUltimaDeteccion > tiempoEsperaReconexion)) {
-    oponenteDetectado = false;
-    digitalWrite(ledAtaque, LOW);
-    Serial.println("Perdí al oponente - Volviendo a modo exploración");
-  }
+  // Medir distancia con ultrasonido
+  int distancia = medirDistancia();
   
-  if (oponenteDetectado) {
-    modoAtaque();
-  } else {
-    modoExploracion();
-  }
-  
-  delay(50);
-}
-void deteccionIzquierda() {
-  if (!oponenteDetectado) {
-    Serial.println("carro mid en la izquierda");
-  }
-  oponenteDetectado = true;
-  tiempoUltimaDeteccion = millis();
-  ultimaDireccion = 1;
-  digitalWrite(ledAtaque, HIGH);
-}
-void deteccionDerecha() {
-  if (!oponenteDetectado) {
-    Serial.println("carro mid en la derecha");
-  }
-  oponenteDetectado = true;
-  tiempoUltimaDeteccion = millis();
-  ultimaDireccion = 2;
-  digitalWrite(ledAtaque, HIGH);
-}
-
-void modoAtaque() {
-  if (ultimaDireccion == 1) {
-    Serial.println("ATAQUE: Girando IZQUIERDA hacia oponente");
-    girarIzquierda(velocidadAtaque);
-  } else if (ultimaDireccion == 2) {
-    Serial.println("ATAQUE: Girando DERECHA hacia oponente");
-    girarDerecha(velocidadAtaque);
-  } else {
-    Serial.println("ATAQUE: Avanzando recto");
+  // Prioridad: si hay algo al frente dentro del umbral, embestir
+  if (distancia > 0 && distancia <= distanciaUmbral) {
+    Serial.print("Embestida - distancia: ");
+    Serial.println(distancia);
+    digitalWrite(ledAtaque, HIGH);
     avanzarRecto(velocidadAtaque);
-  }
-}
-
-void modoExploracion() {
-  static unsigned long ultimoCambio = 0;
-  static int patronBusqueda = 0;
-  if (millis() - ultimoCambio > 3000) {
-    patronBusqueda = random(0, 3); // 0, 1 o 2
-    ultimoCambio = millis();
+  } else {
+    // Leer estado de los sensores con lógica invertida (LOW = detecta, HIGH = no detecta)
+    sensorIzqActivo = (digitalRead(sensorIzquierdo) == LOW);
+    sensorDerActivo = (digitalRead(sensorDerecho) == LOW);
     
-    switch(patronBusqueda) {
-      case 0:
-        Serial.println("EXPLORACIÓN: Giro izquierda suave");
-        break;
-      case 1:
-        Serial.println("EXPLORACIÓN: Giro derecha suave");
-        break;
-      case 2:
-        Serial.println("EXPLORACIÓN: Avance recto breve");
-        break;
+    // Decidir acción según sensores
+    if (sensorIzqActivo && sensorDerActivo) {
+      // Ambos sensores detectan: avanzar recto al ataque
+      Serial.println("ATAQUE FRONTAL - Ambos sensores");
+      digitalWrite(ledAtaque, HIGH);
+      avanzarRecto(velocidadAtaque);
+      
+    } else if (sensorIzqActivo) {
+      // Solo sensor izquierdo: girar izquierda hasta perderlo
+      Serial.println("Girando IZQUIERDA - Siguiendo oponente");
+      digitalWrite(ledAtaque, HIGH);
+      girarIzquierda(velocidadGiro);
+      
+    } else if (sensorDerActivo) {
+      // Solo sensor derecho: girar derecha hasta perderlo
+      Serial.println("Girando DERECHA - Siguiendo oponente");
+      digitalWrite(ledAtaque, HIGH);
+      girarDerecha(velocidadGiro);
+      
+    } else {
+      // Ningún sensor detecta: modo exploración
+      Serial.println("Explorando...");
+      digitalWrite(ledAtaque, LOW);
+      avanzarRecto(velocidadExploracion);
     }
   }
-  switch(patronBusqueda) {
-    case 0:
-      girarIzquierda(velocidadExploracion);
-      break;
-    case 1:
-      girarDerecha(velocidadExploracion);
-      break;
-    case 2:
-      avanzarRecto(velocidadExploracion);
-      break;
-  }
+  
+  delay(10); // Pequeño delay para estabilidad
 }
 
 void avanzarRecto(int velocidad) {
-  analogWrite(enableA, velocidad);
-  analogWrite(enableB, velocidad);
+  int velA = velocidad * factorA;
+  int velB = velocidad * factorB;
+  
+  analogWrite(enableA, velA);
+  analogWrite(enableB, velB);
   
   digitalWrite(pinMotorA1, HIGH);
   digitalWrite(pinMotorA2, LOW);
@@ -131,9 +108,13 @@ void avanzarRecto(int velocidad) {
 }
 
 void girarIzquierda(int velocidad) {
-  analogWrite(enableA, velocidad);
-  analogWrite(enableB, velocidad);
+  int velA = velocidad * factorA;
+  int velB = velocidad * factorB;
   
+  analogWrite(enableA, velA);
+  analogWrite(enableB, velB);
+  
+  // Motor A adelante, Motor B atrás
   digitalWrite(pinMotorA1, HIGH);
   digitalWrite(pinMotorA2, LOW);
   digitalWrite(pinMotorB1, LOW);
@@ -141,9 +122,13 @@ void girarIzquierda(int velocidad) {
 }
 
 void girarDerecha(int velocidad) {
-  analogWrite(enableA, velocidad);
-  analogWrite(enableB, velocidad);
+  int velA = velocidad * factorA;
+  int velB = velocidad * factorB;
   
+  analogWrite(enableA, velA);
+  analogWrite(enableB, velB);
+  
+  // Motor A atrás, Motor B adelante
   digitalWrite(pinMotorA1, LOW);
   digitalWrite(pinMotorA2, HIGH);
   digitalWrite(pinMotorB1, HIGH);
@@ -151,8 +136,11 @@ void girarDerecha(int velocidad) {
 }
 
 void retroceder(int velocidad) {
-  analogWrite(enableA, velocidad);
-  analogWrite(enableB, velocidad);
+  int velA = velocidad * factorA;
+  int velB = velocidad * factorB;
+  
+  analogWrite(enableA, velA);
+  analogWrite(enableB, velB);
   
   digitalWrite(pinMotorA1, LOW);
   digitalWrite(pinMotorA2, HIGH);
@@ -168,4 +156,35 @@ void detener() {
   digitalWrite(pinMotorA2, LOW);
   digitalWrite(pinMotorB1, LOW);
   digitalWrite(pinMotorB2, LOW);
+}
+
+// --- Ultrasonido ---
+int medirDistancia() {
+  long suma = 0;
+  int lecturasValidas = 0;
+  
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
+    
+    long duracionLocal = pulseIn(echoPin, HIGH, 30000); // timeout 30ms
+    
+    if (duracionLocal > 0) {
+      int dist = duracionLocal * 0.034 / 2; // cm
+      if (dist > 2 && dist < 400) {
+        suma += dist;
+        lecturasValidas++;
+      }
+    }
+    delay(10);
+  }
+  
+  if (lecturasValidas > 0) {
+    return suma / lecturasValidas;
+  } else {
+    return -1; // sin lectura válida
+  }
 }
